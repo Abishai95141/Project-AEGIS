@@ -431,16 +431,19 @@ const CausalEngine = {
     },
 
     estimateTreatmentEffect(l1Output, l2Output, patientParams) {
-        // Start with population effect
+        // Start with population effect (-25 mg/dL per unit)
         let effect = this.populationEffect;
 
         // Adjust for insulin sensitivity modifier from L1
-        effect *= l1Output.insulinSensitivityModifier;
+        // Lower sensitivity means each unit does LESS (effect is smaller, closer to 0)
+        // Higher sensitivity means each unit does MORE (effect is larger, more negative)
+        const sensitivityMod = l1Output.insulinSensitivityModifier;
 
-        // Adjust for patient parameters
+        // Adjust for patient parameters (ISF = Insulin Sensitivity Factor)
+        let patientFactor = 1.0;
         if (patientParams.weight && patientParams.tdi) {
-            const isf = patientParams.weight * 1800 / patientParams.tdi; // Rule of 1800
-            effect = effect * (50 / isf); // Normalize to average ISF of 50
+            const isf = 1800 / patientParams.tdi; // Rule of 1800: ISF = 1800 / TDI
+            patientFactor = isf / 40; // Normalize to average ISF of 40
         }
 
         // Adjust for regime
@@ -451,11 +454,19 @@ const CausalEngine = {
             illness: 0.6,   // Much less sensitive during illness
             dawn: 0.85
         };
+        const regimeMod = regimeMultipliers[l2Output.regime.regime] || 1.0;
 
-        effect *= regimeMultipliers[l2Output.regime.regime] || 1.0;
+        // Combined effect: apply modifiers
+        // Note: effect starts negative (-25), so multiplying by modifiers:
+        // - sensitivityMod < 1 → more resistant → effect closer to 0 (less drop per unit)
+        // - sensitivityMod > 1 → more sensitive → effect more negative (more drop per unit)
+        effect = effect * sensitivityMod * patientFactor * regimeMod;
+
+        // Clamp to physiologically realistic bounds (-50 to -10 mg/dL per Unit)
+        effect = Math.max(-50, Math.min(-10, effect));
 
         // Standard error based on uncertainty
-        const se = Math.abs(effect) * l2Output.uncertainty.stateVariance;
+        const se = Math.abs(effect) * l2Output.uncertainty.stateVariance * 0.3;
 
         return { effect, se };
     },
